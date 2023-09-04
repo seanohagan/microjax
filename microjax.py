@@ -4,6 +4,9 @@ from copy import deepcopy
 
 
 def base26(n):
+    if not isinstance(n, int) or n < 0:
+        raise ValueError("Input n must be a nonnegative integer")
+
     s = ""
     while n >= 0:
         s = chr(n % 26 + ord("a")) + s
@@ -164,72 +167,13 @@ def grad(f):
         for output in f.outputs
     ]
 
-    out_irf = IRF(grad_ir, f.inputs, outputs)
+    pruned_grad_ir = [
+        instr
+        for instr in grad_ir
+        if instr not in f.instructions
+        or any([influences[outvar].get(instr[0], False) for outvar in f.outputs])
+    ]
+
+    out_irf = IRF(pruned_grad_ir, f.inputs, outputs)
+
     return out_irf
-
-
-#
-# def f(x, y):
-#     a = x + y
-#     b = a * y
-#     return b
-#
-#
-def g(x, y):
-    return x + 2, y * 3
-
-
-print(make_ir(g))
-
-print(grad(g))
-
-#
-#
-# def h(x, y, z):
-#     a = x * y + 45
-#     d = z + -2
-#     b = a * (y + d)
-#     c = b + z + (-2 * x)
-#     return c + y
-#
-#
-# g_ir = get_ir(g)
-# print(g_ir.inputs)
-# print(g_ir.outputs)
-# print(g_ir.instructions)
-# print(g(4, 3))
-# print(g_ir(4, 3))
-#
-# print("grad_ir:")
-# print("g: 4xy + 4x\ngrad g: (4y+4, 4x)")
-grad_g = grad(g)
-print(grad_g)
-print(grad_g(3, 4))
-hess_g = grad(grad_g)
-print(hess_g)
-print(hess_g(3, 4))
-
-
-# print(grad_g_ir.inputs)
-# print(grad_g_ir.outputs)
-# print(grad_g_ir.instructions)
-# print(grad_g_ir(4, 3))
-# print(grad_g_ir(11, 4))
-#
-def morg(x, y, z):
-    return 3 * x + y * y + z * z * z
-
-
-grad_morg = grad(morg)
-print(grad_morg)
-# print(grad_morg.inputs)
-# # print(grad_morg.outputs)
-# # print(grad_morg.instructions)
-# # print(evaluate_ir(grad_morg.instructions, {"x": 1, "y": 2, "z": 3}))
-print(grad_morg(1, 2, 3))
-print(grad_morg(4, 5, 6))
-
-hess_morg = grad(grad_morg)
-print(hess_morg)
-print(hess_morg(1, 2, 3))
-print(hess_morg(4, 5, 6))
