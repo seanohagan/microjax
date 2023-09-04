@@ -50,7 +50,7 @@ class IRF:
 
     def __call__(self, *args):
         if self.jitted_func:
-            return self.jitted_func.__call__(*args)
+            return self.jitted_func(*args)
 
         substitutions = dict(zip(self.inputs, args))
         values = evaluate_ir(self.instructions, substitutions)
