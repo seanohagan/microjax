@@ -1,5 +1,0 @@
-[tool.pyright]
-"reportUnusedVariable": false
-"reportMissingImports": false
-"reportUnusedImports": false
-
