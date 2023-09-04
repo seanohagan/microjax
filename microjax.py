@@ -279,13 +279,3 @@ class JittedFunc:
                 getattr(result, f"f{i+1}") for i in range(len(result._fields_))
             )
         return result
-
-
-def f(x, y):
-    return (2 * x * x, x * y)
-
-
-jitted_f = jit(f)
-print(f(3, 4))
-print(jitted_f(3, 4))
-print(jitted_f(3, 4))
