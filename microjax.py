@@ -1,6 +1,10 @@
 import inspect
+from typing import Optional
 from pprint import pformat
 from copy import deepcopy
+import llvmlite.ir as llvm_ir
+import llvmlite.binding as llvm
+from ctypes import CFUNCTYPE, c_float, Structure
 
 
 def base26(n):
@@ -39,11 +43,15 @@ class IRF:
         self.instructions = instructions
         self.inputs = inputs
         self.outputs = outputs
+        self.jitted_func: Optional[JittedFunc] = None
 
     def __repr__(self):
         return pformat(self.__dict__)
 
     def __call__(self, *args):
+        if self.jitted_func:
+            return self.jitted_func.__call__(*args)
+
         substitutions = dict(zip(self.inputs, args))
         values = evaluate_ir(self.instructions, substitutions)
         return (
@@ -177,3 +185,107 @@ def grad(f):
     out_irf = IRF(pruned_grad_ir, f.inputs, outputs)
 
     return out_irf
+
+
+def jit(irf):
+    if not isinstance(irf, IRF):
+        irf = make_ir(irf)
+
+    module = llvm_ir.Module(name="microjax")
+    ret_type = (
+        llvm_ir.FloatType()
+        if len(irf.outputs) == 1
+        else llvm_ir.ArrayType(llvm_ir.FloatType(), len(irf.outputs))
+    )
+    ft = llvm_ir.FunctionType(
+        ret_type,
+        [llvm_ir.FloatType() for _ in irf.inputs],
+    )
+    func = llvm_ir.Function(module, ft, name="func")
+
+    symbols = {}
+
+    for arg, ssa_arg in zip(func.args, irf.inputs):
+        arg.name = ssa_arg
+        symbols[ssa_arg] = arg
+
+    block = func.append_basic_block(name="entry")
+
+    builder = llvm_ir.IRBuilder(block)
+    ops = {"add": builder.fadd, "mul": builder.fmul}
+    for instruction in irf.instructions:
+        var_name, op, operand1, operand2 = instruction
+
+        op1 = symbols.get(operand1, llvm_ir.Constant(llvm_ir.FloatType(), operand1))
+        op2 = symbols.get(operand2, llvm_ir.Constant(llvm_ir.FloatType(), operand2))
+
+        results = ops[op](op1, op2, name=var_name)
+        symbols[var_name] = results
+
+    if len(irf.outputs) == 1:
+        builder.ret(symbols[irf.outputs[0]])
+    else:
+        values_to_return = [symbols[output] for output in irf.outputs]
+        array_ptr = builder.alloca(ret_type)
+        for idx, val in enumerate(values_to_return):
+            index_constant = llvm_ir.Constant(llvm_ir.IntType(32), idx)
+            elem_ptr = builder.gep(
+                array_ptr, [llvm_ir.Constant(llvm_ir.IntType(32), 0), index_constant]
+            )
+            builder.store(val, elem_ptr)
+
+        loaded_array = builder.load(array_ptr)
+        builder.ret(loaded_array)
+
+    llvm.initialize()
+    llvm.initialize_native_target()
+    llvm.initialize_all_asmprinters()
+
+    target = llvm.Target.from_default_triple()
+    target_machine = target.create_target_machine()
+    compiled_engine = llvm.create_mcjit_compiler(
+        llvm.parse_assembly(str(module)), target_machine
+    )
+    if len(irf.outputs) == 1:
+        c_ret_type = c_float
+    else:
+
+        class ReturnStruct(Structure):
+            _fields_ = [(f"f{i+1}", c_float) for i, _ in enumerate(irf.outputs)]
+
+        c_ret_type = ReturnStruct
+    cfunctype = CFUNCTYPE(c_ret_type, *(c_float for _ in irf.inputs))
+    jf = JittedFunc(func, cfunctype, module, target, target_machine, compiled_engine)
+
+    jitted_irf = deepcopy(irf)
+    jitted_irf.jitted_func = jf
+    return jitted_irf
+
+
+class JittedFunc:
+    def __init__(self, func, cfunctype, module, target, target_machine, engine):
+        self.module = module
+        self.func = func
+        self.target = target
+        self.target_machine = target_machine
+        self.engine = engine
+        self.ptr = self.engine.get_function_address("func")
+        self.cfunc = cfunctype(self.ptr)
+
+    def __call__(self, *args):
+        result = self.cfunc(*args)
+        if isinstance(result, Structure):
+            return tuple(
+                getattr(result, f"f{i+1}") for i in range(len(result._fields_))
+            )
+        return result
+
+
+def f(x, y):
+    return (2 * x * x, x * y)
+
+
+jitted_f = jit(f)
+print(f(3, 4))
+print(jitted_f(3, 4))
+print(jitted_f(3, 4))
