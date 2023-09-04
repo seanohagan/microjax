@@ -225,7 +225,10 @@ def jit(irf):
     if len(irf.outputs) == 1:
         builder.ret(symbols[irf.outputs[0]])
     else:
-        values_to_return = [symbols[output] for output in irf.outputs]
+        values_to_return = [
+            symbols.get(output, llvm_ir.Constant(llvm_ir.FloatType(), 0.0))
+            for output in irf.outputs
+        ]
         array_ptr = builder.alloca(ret_type)
         for idx, val in enumerate(values_to_return):
             index_constant = llvm_ir.Constant(llvm_ir.IntType(32), idx)

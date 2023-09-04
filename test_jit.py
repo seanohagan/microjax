@@ -1,4 +1,5 @@
 from microjax import jit
+from microjax import grad
 import time
 
 
@@ -47,6 +48,28 @@ def test_jit_speed():
         times_normal_f += time.perf_counter() - start
         start = time.perf_counter()
         jitted_f(4)
+        times_jitted_f += time.perf_counter() - start
+
+    print(times_normal_f / times_jitted_f)
+    assert times_jitted_f <= times_normal_f
+
+
+def test_jit_speed_2():
+    def f(x, y, z):
+        return 2 * x + 3.0 * y * y + (-1 * z * z * z)
+
+    hess_f = grad(grad(f))
+    jitted_hess_f = jit(grad(grad(f)))
+
+    times_normal_f = 0
+    times_jitted_f = 0
+
+    for i in range(100):
+        start = time.perf_counter()
+        hess_f(4, 5, 6)
+        times_normal_f += time.perf_counter() - start
+        start = time.perf_counter()
+        jitted_hess_f(4, 5, 6)
         times_jitted_f += time.perf_counter() - start
 
     print(times_normal_f / times_jitted_f)
