@@ -1,5 +1,5 @@
 import inspect
-from typing import Optional
+from typing import Optional, List, Union, Sequence
 from pprint import pformat
 from copy import deepcopy
 import llvmlite.ir as llvm_ir
@@ -282,3 +282,20 @@ class JittedFunc:
                 getattr(result, f"f{i+1}") for i in range(len(result._fields_))
             )
         return result
+
+
+def vmap(irf):
+    if not isinstance(irf, IRF):
+        irf = make_ir(irf)
+
+    def func(
+        argsl: Union[Sequence[Union[int, float]], Sequence[tuple]]
+    ) -> List[Union[float, tuple]]:
+        if all(isinstance(arg, (int, float)) for arg in argsl):
+            return [irf(argset) for argset in argsl]
+        elif all(isinstance(arg, tuple) for arg in argsl):
+            return [irf(*argset) for argset in argsl]  # type: ignore
+        else:
+            raise ValueError("Input is of wrong type")
+
+    return func
