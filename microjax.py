@@ -39,12 +39,13 @@ def evaluate_ir(ir, subs):
 
 
 class IRF:
-    def __init__(self, instructions, inputs, outputs, vmapped=False):
+    def __init__(self, instructions, inputs, outputs):
         self.instructions = instructions
         self.inputs = inputs
         self.outputs = outputs
         self._executor: Optional[Callable] = None
-        self.vmapped = vmapped
+        self.vmapped = False
+        self.jitted = False
 
     def __repr__(self):
         return pformat(self.__dict__)
@@ -251,29 +252,48 @@ def jit(irf):
     llvm.initialize()
     llvm.initialize_native_target()
     llvm.initialize_all_asmprinters()
+    module.triple = "arm64-apple-darwin21.5.0"
+    module.data_layout = "e-m:o-i64:64-i128:128-n32:64-S128"
+    print(str(module))
+
+    with open("output.ll", "w") as f:
+        f.write(str(module))
 
     target = llvm.Target.from_default_triple()
     target_machine = target.create_target_machine()
     compiled_engine = llvm.create_mcjit_compiler(
         llvm.parse_assembly(str(module)), target_machine
     )
+    c_data_type = c_float if not irf.vmapped else c_float * SIMD_WIDTH
     if len(irf.outputs) == 1:
-        c_ret_type = c_float
+        c_ret_type = c_data_type
     else:
 
         class ReturnStruct(Structure):
-            _fields_ = [(f"f{i+1}", c_float) for i, _ in enumerate(irf.outputs)]
+            _fields_ = [(f"f{i+1}", c_data_type) for i, _ in enumerate(irf.outputs)]
 
         c_ret_type = ReturnStruct
-    cfunctype = CFUNCTYPE(c_ret_type, *(c_float for _ in irf.inputs))
-    jf = JittedFunc(func, cfunctype, module, target, target_machine, compiled_engine)
+    cfunctype = CFUNCTYPE(c_ret_type, *(c_data_type for _ in irf.inputs))
+    jf = JittedFunc(
+        func,
+        cfunctype,
+        module,
+        target,
+        target_machine,
+        compiled_engine,
+        irf.vmapped,
+        SIMD_WIDTH,
+    )
 
-    irf._executor = jf
-    return irf
+    new_irf = deepcopy(irf)
+    new_irf._executor = jf
+    return new_irf
 
 
 class JittedFunc:
-    def __init__(self, func, cfunctype, module, target, target_machine, engine):
+    def __init__(
+        self, func, cfunctype, module, target, target_machine, engine, vmapped, simdw
+    ):
         self.module = module
         self.func = func
         self.target = target
@@ -281,14 +301,30 @@ class JittedFunc:
         self.engine = engine
         self.ptr = self.engine.get_function_address("func")
         self.cfunc = cfunctype(self.ptr)
+        self.vmapped = vmapped
+        self.simdw = simdw
 
     def __call__(self, *args):
-        result = self.cfunc(*args)
-        if isinstance(result, Structure):
-            return tuple(
-                getattr(result, f"f{i+1}") for i in range(len(result._fields_))
-            )
-        return result
+        if not self.vmapped:
+            result = self.cfunc(*args)
+            if isinstance(result, Structure):
+                return tuple(
+                    getattr(result, f"f{i+1}") for i in range(len(result._fields_))
+                )
+            return result
+        else:
+            print(args[0])
+            dtype = c_float * 4
+            inputdata = dtype(*args[0])
+            print(inputdata, list(inputdata))
+            return list(self.cfunc(inputdata))
+        #     q, r = divmod(len(args[0]), self.simdw)
+        #     ret = []
+        #     for i in range(q):
+        #         batch_args = [
+        #             arg[(i * self.simdw) * ((i + 1) * self.simdw)] for arg in args
+        #         ]
+        #         batch_res = self.cfunc
 
 
 def vmap(irf):
@@ -305,4 +341,7 @@ def vmap(irf):
         else:
             raise ValueError("Input is of wrong type")
 
-    return func
+    new_irf = deepcopy(irf)
+    new_irf.vmapped = True
+    new_irf._executor = func
+    return new_irf
