@@ -1,5 +1,5 @@
 import inspect
-from typing import Optional, List, Union, Sequence
+from typing import Optional, List, Union, Sequence, Callable
 from pprint import pformat
 from copy import deepcopy
 import llvmlite.ir as llvm_ir
@@ -39,18 +39,19 @@ def evaluate_ir(ir, subs):
 
 
 class IRF:
-    def __init__(self, instructions, inputs, outputs):
+    def __init__(self, instructions, inputs, outputs, vmapped=False):
         self.instructions = instructions
         self.inputs = inputs
         self.outputs = outputs
-        self.jitted_func: Optional[JittedFunc] = None
+        self._executor: Optional[Callable] = None
+        self.vmapped = vmapped
 
     def __repr__(self):
         return pformat(self.__dict__)
 
     def __call__(self, *args):
-        if self.jitted_func:
-            return self.jitted_func(*args)
+        if self._executor:
+            return self._executor(*args)
 
         substitutions = dict(zip(self.inputs, args))
         values = evaluate_ir(self.instructions, substitutions)
@@ -191,15 +192,22 @@ def jit(irf):
     if not isinstance(irf, IRF):
         irf = make_ir(irf)
 
+    SIMD_WIDTH = 4
+
     module = llvm_ir.Module(name="microjax")
-    ret_type = (
+    data_type = (
         llvm_ir.FloatType()
+        if not irf.vmapped
+        else llvm_ir.VectorType(llvm_ir.FloatType(), SIMD_WIDTH)
+    )
+    ret_type = (
+        data_type
         if len(irf.outputs) == 1
-        else llvm_ir.ArrayType(llvm_ir.FloatType(), len(irf.outputs))
+        else llvm_ir.ArrayType(data_type, len(irf.outputs))
     )
     ft = llvm_ir.FunctionType(
         ret_type,
-        [llvm_ir.FloatType() for _ in irf.inputs],
+        [data_type for _ in irf.inputs],
     )
     func = llvm_ir.Function(module, ft, name="func")
 
@@ -216,8 +224,8 @@ def jit(irf):
     for instruction in irf.instructions:
         var_name, op, operand1, operand2 = instruction
 
-        op1 = symbols.get(operand1, llvm_ir.Constant(llvm_ir.FloatType(), operand1))
-        op2 = symbols.get(operand2, llvm_ir.Constant(llvm_ir.FloatType(), operand2))
+        op1 = symbols.get(operand1, llvm_ir.Constant(data_type, operand1))
+        op2 = symbols.get(operand2, llvm_ir.Constant(data_type, operand2))
 
         results = ops[op](op1, op2, name=var_name)
         symbols[var_name] = results
@@ -260,9 +268,8 @@ def jit(irf):
     cfunctype = CFUNCTYPE(c_ret_type, *(c_float for _ in irf.inputs))
     jf = JittedFunc(func, cfunctype, module, target, target_machine, compiled_engine)
 
-    jitted_irf = deepcopy(irf)
-    jitted_irf.jitted_func = jf
-    return jitted_irf
+    irf._executor = jf
+    return irf
 
 
 class JittedFunc:
