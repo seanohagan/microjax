@@ -33,7 +33,7 @@ def test_jit_many_inputs_many_output():
 def test_jit_speed():
     def f(x):
         c = 0
-        for j in range(100):
+        for _ in range(100):
             c += x
         return c
 
@@ -42,7 +42,7 @@ def test_jit_speed():
     times_normal_f = 0
     times_jitted_f = 0
 
-    for i in range(100):
+    for _ in range(100):
         start = time.perf_counter()
         f(4)
         times_normal_f += time.perf_counter() - start
@@ -64,7 +64,7 @@ def test_jit_speed_2():
     times_normal_f = 0
     times_jitted_f = 0
 
-    for i in range(100):
+    for _ in range(100):
         start = time.perf_counter()
         hess_f(4, 5, 6)
         times_normal_f += time.perf_counter() - start
